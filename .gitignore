@@ -1,0 +1,25 @@
+# Runtime configuration & local credentials (never commit)
+config.yaml
+accounts/*.json
+!accounts/account.example.json
+accounts/.*.json
+accounts/perplexity/*.json
+accounts/.agent_threads.state*
+
+# Compiled binaries
+/perplexity-bridge
+/perplexity-bridge.exe
+/notion-manager
+/notion-manager.exe
+
+# Logs, PID files, and backups
+*.log
+*.pid
+*.bak
+*.tmp
+
+# OS & Python artifacts
+.DS_Store
+__pycache__/
+*.pyc
+.pytest_cache/

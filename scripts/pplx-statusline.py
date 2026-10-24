@@ -132,14 +132,16 @@ def fetch_pool_quota(base_url):
         return None, None, None
     usable = [
         a for a in accounts
-        if isinstance(a, dict) and a.get("status") == "active"
+        if isinstance(a, dict) and (a.get("available") is True or a.get("status") == "active")
     ]
     acc = usable[0] if usable else (accounts[0] if isinstance(accounts[0], dict) else {})
-    quota = acc.get("quota") or {}
+    quota = acc.get("quota") or acc.get("quota_info") or {}
     pro_rem = quota.get("remaining_pro")
     if pro_rem is None:
-        limit = quota.get("limit")
-        usage = quota.get("usage")
+        pro_rem = quota.get("premium_balance")
+    if pro_rem is None:
+        limit = quota.get("limit") if quota.get("limit") is not None else quota.get("space_limit")
+        usage = quota.get("usage") if quota.get("usage") is not None else quota.get("space_usage")
         if isinstance(limit, int) and isinstance(usage, int) and limit > 0:
             pro_rem = max(0, limit - usage)
     max_rem = quota.get("remaining_agentic_research")

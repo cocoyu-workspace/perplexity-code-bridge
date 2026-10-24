@@ -1,0 +1,30 @@
+server:
+  port: "18082"
+  host: "127.0.0.1"
+  api_key: "sk-pplx-local-bridge-example-key"
+  accounts_dir: "accounts"
+
+refresh:
+  interval_minutes: 30
+  concurrency: 5
+
+proxy:
+  default_provider: "perplexity"
+  default_model: "sonnet-5.5"
+  agent_thread: true
+  max_retries: 2
+  upstream_proxy: ""
+
+timeouts:
+  tls_dial_timeout: 30
+  stream_timeout: 300
+  models_fetch_timeout: 20
+  quota_check_timeout: 15
+
+logging:
+  debug: true
+  log_file: ""
+  api_log_input: false
+  api_log_output: false
+  upstream_log_request: false
+  upstream_log_response: false

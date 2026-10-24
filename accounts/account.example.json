@@ -1,0 +1,7 @@
+{
+  "provider": "perplexity",
+  "session_token": "YOUR_NEXT_AUTH_SESSION_TOKEN_JWT_HERE",
+  "user_email": "user@example.com",
+  "user_name": "Example User",
+  "plan_type": "pro"
+}

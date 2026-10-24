@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -81,6 +82,30 @@ class TestClaudePplxLauncher(unittest.TestCase):
         self.assertIn("Claude Sonnet 5.5", line)
         self.assertIn("42%", line)
         self.assertIn("demo-project", line)
+
+    def test_discover_skill_context_and_custom_agents(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            skill_dir = tmp_path / ".agents" / "skills" / "demo-skill"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text(
+                "---\nname: demo-skill\ndescription: Demo workflow skill\n---\n# Demo\n",
+                encoding="utf-8",
+            )
+            ctx = launcher.discover_skill_context([], cwd=tmp_path, home=tmp_path)
+            self.assertIn("- demo-skill: Demo workflow skill", ctx)
+            self.assertIn("SKILL.md", ctx)
+
+            agents_dir = tmp_path / "agents"
+            agents_dir.mkdir()
+            (agents_dir / "reviewer.md").write_text(
+                "---\nname: reviewer\ndescription: Code reviewer\nmodel: sonnet-5.5\ntools:\n  - Read\n  - Grep\n---\nReview carefully.\n",
+                encoding="utf-8",
+            )
+            agents = launcher.load_custom_agents(agents_dir=agents_dir)
+            self.assertIn("reviewer", agents)
+            self.assertEqual(agents["reviewer"]["description"], "Code reviewer")
+            self.assertEqual(agents["reviewer"]["tools"], ["Read", "Grep"])
 
 
 if __name__ == "__main__":

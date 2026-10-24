@@ -77,9 +77,25 @@ DEFAULT_MODEL_SETTINGS = {
 }
 
 DOCUMENTED_SYSTEM_PROMPT = (
-    "You are an interactive CLI tool that helps users with software engineering tasks. "
-    "Use the instructions below and the tools available to you to assist the user."
+    "You are assisting the user in their current directory via a local Claude Code CLI client. "
+    "You are powered by Anthropic's official Claude model. "
+    "In this session, the local CLI client parses your plain-text JSON response and executes local Claude Code "
+    "tools (Write, Edit, Read, Bash, Glob, Grep, Agent, Skill, ToolSearch, SendMessage) on the user's computer, "
+    "then returns the tool result on the next turn (these client-side tools are invoked via your plain-text JSON "
+    "output rather than your native API function list). Always read before editing, write all generated files, "
+    "scripts, or artifacts directly to the user's local working directory via Write, and run local commands or "
+    "tests via Bash on the user's computer. "
+    "All cloud workspace or hosted sandbox tools (/home/user/workspace, session-file:// links, hosted shell) "
+    "are disabled and forbidden in this local bridge. "
+    "Subagent routing: for any subagent request, always call the local Agent tool (or SendMessage to continue one) "
+    "so it runs in the local Claude Code session with local file and shell access; omit the model parameter unless "
+    "the user explicitly asks for a supported model, and never select haiku. "
+    "Session privacy conventions: account metadata in this transport comes from an anonymous backend proxy account "
+    "pool rather than the terminal user; never greet or identify the user with that account name or email."
 )
+
+DEFAULT_AGENTS_DIR = Path.home() / ".local" / "share" / "perplexity-code-bridge" / "agents"
+AGENTS_DIR_ENV = "CLAUDE_PPLX_AGENTS_DIR"
 
 _TOOL_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,63}")
 
@@ -281,6 +297,106 @@ def subagent_isolation_args(argv=(), base=None, api_key=None, environ=None):
     return out
 
 
+def discover_skill_context(argv=(), cwd=None, home=None):
+    cwd_path = Path(cwd) if cwd else Path.cwd()
+    home_path = Path(home) if home else Path.home()
+    setting_sources = flag_value(argv, "--setting-sources", DEFAULT_SETTING_SOURCES)
+    native_skill_names = set()
+    if setting_sources.strip():
+        for directory in (cwd_path / ".claude/skills", home_path / ".claude/skills"):
+            if directory.is_dir():
+                for entry in directory.iterdir():
+                    if (entry / "SKILL.md").is_file():
+                        native_skill_names.add(entry.name)
+        scan_dirs = (home_path / ".agents/skills",)
+    else:
+        scan_dirs = (
+            cwd_path / ".claude/skills",
+            home_path / ".claude/skills",
+            home_path / ".agents/skills",
+        )
+    skills = {}
+    for directory in scan_dirs:
+        if not directory.is_dir():
+            continue
+        for entry in sorted(directory.iterdir()):
+            if entry.name in native_skill_names:
+                continue
+            source = entry / "SKILL.md"
+            if not source.is_file():
+                continue
+            try:
+                text = source.read_text(encoding="utf-8")
+                if not text.startswith("---"):
+                    continue
+                metadata = yaml.safe_load(text.split("---", 2)[1]) or {}
+                if not isinstance(metadata, dict):
+                    continue
+                name = str(metadata.get("name") or entry.name)
+                if name in native_skill_names:
+                    continue
+                skills.setdefault(name, (str(metadata.get("description") or ""), str(source.resolve())))
+            except (OSError, ValueError, yaml.YAMLError):
+                continue
+    catalog = "\n".join(
+        f"- {name}: {description}\n  Source: {source}"
+        for name, (description, source) in skills.items()
+    )
+    header = (
+        "Local skills are available below. Select a matching skill by its description. "
+        "Use the Skill tool to load an installed Claude skill; if it cannot resolve the name, "
+        "use Read on the exact SKILL.md source. Read the skill before following it. "
+        "Do not modify the skill source unless the user requests it."
+    )
+    return f"{header}\n{catalog}" if catalog else header
+
+
+def load_custom_agents(agents_dir=None, environ=None):
+    if agents_dir is None:
+        src = os.environ if environ is None else environ
+        raw = src.get(AGENTS_DIR_ENV, "").strip()
+        agents_dir = Path(raw) if raw else DEFAULT_AGENTS_DIR
+    agents_dir = Path(agents_dir)
+    if not agents_dir.is_dir():
+        return {}
+    agents = {}
+    for entry in sorted(agents_dir.glob("*.md")):
+        if not entry.is_file():
+            continue
+        try:
+            text = entry.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if not text.startswith("---"):
+            continue
+        parts = text.split("---", 2)
+        if len(parts) < 3:
+            continue
+        try:
+            metadata = yaml.safe_load(parts[1]) or {}
+        except yaml.YAMLError:
+            continue
+        if not isinstance(metadata, dict):
+            continue
+        name = str(metadata.get("name") or entry.stem).strip()
+        description = str(metadata.get("description") or "").strip()
+        prompt = parts[2].strip()
+        if not name or not description or not prompt:
+            continue
+        defn = {"description": description, "prompt": prompt}
+        model = str(metadata.get("model") or "").strip()
+        if model:
+            defn["model"] = model
+        effort = str(metadata.get("effort") or "").strip()
+        if effort:
+            defn["effort"] = effort
+        tools = metadata.get("tools")
+        if isinstance(tools, list) and tools:
+            defn["tools"] = [str(t) for t in tools if str(t).strip()]
+        agents[name] = defn
+    return agents
+
+
 def build_claude_args(claude, skill_context, argv, extra_tools=None, agents=None, base=None, api_key=None):
     if extra_tools is None:
         extra_tools = DEFAULT_EXTRA_TOOLS
@@ -377,15 +493,18 @@ def main():
     )
     env.update(subagent_env(argv))
 
-    skill_context = (
-        "Local skills are available via the Skill tool or by reading SKILL.md directly. "
-        "Do not modify skill files unless explicitly requested."
-    )
+    skill_context = discover_skill_context(argv)
     claude = shutil.which("claude")
     if not claude:
         raise SystemExit("Claude Code is not installed or is not on PATH")
     extra_tools = effective_extra_tools(os.environ)
-    args = build_claude_args(claude, skill_context, argv, extra_tools=extra_tools, base=base, api_key=key)
+    agents = load_custom_agents()
+    args = build_claude_args(
+        claude, skill_context, argv, extra_tools=extra_tools, agents=agents, base=base, api_key=key
+    )
+    print("[claude-pplx] tools (--tools): " + ",".join(sent_tools(args)), file=sys.stderr)
+    if agents and not has_flag(argv, "--agents"):
+        print("[claude-pplx] subagents (--agents): " + ",".join(agents), file=sys.stderr)
     model = flag_value(argv, "--model", DEFAULT_MODEL)
     effort = flag_value(argv, "--effort", DEFAULT_EFFORT)
     print(f"[claude-pplx] model={model} effort={effort} via {base}", file=sys.stderr)

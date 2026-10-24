@@ -1,6 +1,6 @@
 # Perplexity Code Bridge
 
-一个专为 **Claude Code CLI** 打造的本地 Anthropic `/v1/messages` 协议桥接器与隔离启动器（`claude-pplx.py`），底层对接 Perplexity Web 端 `v2.18` REST/SSE 接口（`POST /rest/sse/perplexity_ask`）。
+一个专为 **Claude Code CLI** 打造的本地 Anthropic `/v1/messages` 协议桥接服务端（`perplexity-bridge`）与隔离启动器（`claude-pplx.py`），底层对接 Perplexity Web 端 `v2.18` REST/SSE 接口（`POST /rest/sse/perplexity_ask`）。
 
 通过将 Anthropic 原生工具定义（`tools[]`）与延迟工具目录（`<available-deferred-tools>`）转换为紧凑的 **`LOCAL ACTION PROTOCOL`**，本桥接器让云端模型（`Claude Sonnet 5.5`、`Claude Opus 5.5`、`GPT-6.1 Sol`）能够在本地终端 100% 驱动 **文件读写（`Read` / `Write` / `Edit`）、命令执行（`Bash`）、代码检索（`Glob` / `Grep`）、本地技能加载（`Skill` / `SKILL.md`）、延迟工具按需检索（`ToolSearch`）以及本地多子代理协同（`Agent` / `SendMessage`）**。
 
@@ -33,6 +33,93 @@
 
 ---
 
+## 快速上手：从零启动 `perplexity-bridge` + `claude` CLI
+
+### 第一步：安装前置依赖与克隆仓库
+
+1. 确保本机已安装：
+   - **Go `1.22+`**：`go version`
+   - **Python `3.9+` 与 `pyyaml`**：`pip3 install pyyaml`
+   - **Claude Code CLI**：`npm install -g @anthropic-ai/claude-code`（确保终端执行 `claude --version` 正常输出）
+2. 克隆本仓库：
+   ```bash
+   git clone https://github.com/cocoyu-workspace/perplexity-code-bridge.git
+   cd perplexity-code-bridge
+   ```
+
+### 第二步：获取并配置 Perplexity 账号 Token
+
+1. 在浏览器登录 `https://www.perplexity.ai`（需具备 Pro 或 Max 订阅以使用 `Sonnet 5.5` / `Opus 5.5` / `GPT-6.1 Sol`）。
+2. 按 `F12` 打开浏览器开发者工具（DevTools） -> **Application（应用）** -> 左侧 **Cookies** -> `https://www.perplexity.ai`。
+3. 找到名为 **`__Secure-next-auth.session-token`** 的 Cookie，复制它的完整 Value（以 `eyJhbGci...` 开头的 5 段式字符串）。
+4. 在项目 `accounts/` 目录下创建账号文件（`accounts/*.json` 已被 `.gitignore` 忽略，不会被上传）：
+   ```bash
+   cp accounts/account.example.json accounts/my_account.json
+   ```
+   将复制的 Token 填入 `accounts/my_account.json`（只需填 `session_token`，`plan_type` 填 `"pro"` 或 `"max"` 即可，启动后会自动向服务端校验刷新）：
+   ```json
+   {
+     "provider": "perplexity",
+     "session_token": "粘贴你复制的 __Secure-next-auth.session-token 值",
+     "user_email": "your_email@example.com",
+     "user_name": "My Account",
+     "plan_type": "pro"
+   }
+   ```
+
+### 第三步：启动桥接程序与 Claude Code CLI（三种方式任选）
+
+#### 方式一：使用 `claude-pplx.py` 一键全自动启动（最推荐）
+
+直接运行 `claude-pplx.py`。如果本地 `127.0.0.1:18082` 还没有运行 `perplexity-bridge`，脚本会**自动生成默认 `config.yaml`、自动编译 `perplexity-bridge` 二进制并在后台拉起服务**，随后自动进入隔离配置好的 `claude` CLI：
+
+```bash
+# 1. 默认启动（使用 sonnet-5.5 模型，medium 推理强度，底部挂载实时 Pro/Max 配额状态栏）
+python3 claude-pplx.py
+
+# 2. 切换 1M 超长上下文模型 gpt-6.1-sol 启动
+python3 claude-pplx.py --model gpt-6.1-sol
+
+# 3. 使用 Max 账号启动旗舰模型 opus-5.5 并开启高推理强度
+python3 claude-pplx.py --model opus-5.5 --effort high
+
+# 4. 在你自己的其他代码仓库中使用（建议在 ~/.zshrc 中配置 alias）：
+alias claude-pplx="python3 $(pwd)/claude-pplx.py"
+cd /path/to/your/project
+claude-pplx
+```
+
+#### 方式二：双终端分步启动（适合查看桥接器实时请求日志）
+
+如果你想在独立终端窗口观察桥接器实时转发与工具解析日志，可分两步启动：
+
+- **终端窗口 1（编译并前台运行 `perplexity-bridge` 服务端）**：
+  ```bash
+  cp -n config.example.yaml config.yaml
+  go build -o perplexity-bridge ./cmd/perplexity-bridge
+  ./perplexity-bridge
+  ```
+  看到 `Listening on 127.0.0.1:18082` 与 `[refresh] ... eligible` 即表示服务端与账号池就绪。
+
+- **终端窗口 2（启动 `claude` CLI）**：
+  ```bash
+  python3 claude-pplx.py
+  ```
+
+#### 方式三：不通过启动脚本，直接使用原生 `claude` 命令接入
+
+当 `perplexity-bridge` 已在 `127.0.0.1:18082` 运行时，你也可以直接通过环境变量用原生 `claude` CLI 连接（`api_key` 对应 `config.yaml` 中的 `server.api_key`）：
+
+```bash
+export ANTHROPIC_BASE_URL="http://127.0.0.1:18082"
+export ANTHROPIC_API_KEY="$(python3 -c 'import yaml; print(yaml.safe_load(open("config.yaml"))["server"]["api_key"])')"
+export ENABLE_TOOL_SEARCH="true"
+
+claude --model sonnet-5.5 --dangerously-skip-permissions
+```
+
+---
+
 ## 架构与单轮工具调用数据流
 
 ```text
@@ -53,63 +140,6 @@ POST https://www.perplexity.ai/rest/sse/perplexity_ask (HTTP/2 + Chrome TLS 指�
 Anthropic SSE 响应流 (thinking_delta / tool_use / text_delta)
   │  7. Claude Code 在本机执行 Bash / Read / Edit / Write / Skill / Agent / ToolSearch
   └─ 8. 下一轮携带 tool_result 自动转为 LOCAL TOOL RESULT 续接同一云端线程
-```
-
----
-
-## 快速开始
-
-### 1. 环境要求
-
-- Go `1.22+`
-- Python `3.9+`（需安装 `pyyaml`：`pip install pyyaml`）
-- Claude Code CLI（确保 `claude` 在 `PATH` 中可执行）
-
-### 2. 配置账号与服务参数
-
-```bash
-# 1. 复制配置文件模板（可选；未创建时服务首次启动会自动生成默认 config.yaml 与随机 api_key）
-cp config.example.yaml config.yaml
-
-# 2. 创建本地账号文件（accounts/*.json 已在 .gitignore 中忽略，不会被 Git 追踪）
-cp accounts/account.example.json accounts/my_account.json
-```
-
-编辑 `accounts/my_account.json`，填入已登录浏览器会话中的 `__Secure-next-auth.session-token` 值（完整 5 段式 `eyJhbGci...` JWE 字符串）或完整 Cookie：
-
-```json
-{
-  "provider": "perplexity",
-  "session_token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..xxxx.yyyy.zzzz",
-  "user_email": "user@example.com",
-  "user_name": "Local User",
-  "plan_type": "pro"
-}
-```
-
-### 3. 一键启动 Claude Code CLI
-
-直接运行 `claude-pplx.py`。若本地 `127.0.0.1:18082` 尚未运行 `perplexity-bridge`，启动器会自动编译二进制并在后台拉起服务：
-
-```bash
-# 默认启动（模型 sonnet-5.5，推理强度 medium，自动挂载底部实时配额状态栏）
-python3 claude-pplx.py
-
-# 指定 1M 上下文模型 gpt-6.1-sol 启动
-python3 claude-pplx.py --model gpt-6.1-sol
-
-# 使用 Max 账号启动旗舰模型 opus-5.5 并开启高推理强度
-python3 claude-pplx.py --model opus-5.5 --effort high
-
-# 非交互单次执行（适合脚本或 Harness 自动化验证）
-python3 claude-pplx.py -p "用 Bash 工具运行 go version，并读取 go.mod 的模块名"
-```
-
-也可以手动编译并前台运行桥接服务以查看实时调试日志：
-
-```bash
-go build -o perplexity-bridge ./cmd/perplexity-bridge
-./perplexity-bridge
 ```
 
 ---
@@ -190,6 +220,7 @@ tools:
 | `GET /v1/models` | 返回支持的模型列表（兼容 Anthropic / OpenAI `/v1/models` 格式） |
 | `GET /health` | 健康检查、在途请求数（`in_flight`）与号池配额汇总 |
 | `GET /admin/accounts` | 查看账号池各账号状态、可用性（`available`）、套餐档位与实时剩余配额（`quota_info.premium_balance`） |
+| `POST /admin/accounts` | 传入 `{"session_token": "..."}` 自动探测账号邮箱、套餐档位并落盘到 `accounts/perplexity/` |
 | `POST /admin/accounts/reload` | 从磁盘 `accounts/` 目录热重载账号文件（无需重启进程） |
 | `POST /admin/accounts/refresh` | 立即触发全量账号向 Perplexity 上游刷新实时剩余配额与套餐状态 |
 
@@ -217,8 +248,6 @@ python3 claude-pplx.py -p "用 Bash 工具运行 go version，然后直接回复
 [claude-pplx] model=sonnet-5.5 effort=medium via http://127.0.0.1:18082
 go version go1.26.5 darwin/arm64
 ```
-
-对应服务端日志可见完整的两轮闭环（首轮 `mode=new` 触发本地 `Bash` 工具调用，次轮 `mode=followup` 凭 `context` 续接同一云端线程回传 `LOCAL TOOL RESULT` 并生成最终回答）。
 
 ---
 

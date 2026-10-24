@@ -56,7 +56,7 @@ func newMux(pool *proxy.AccountPool, accountsDir string) *http.ServeMux {
 	mux.HandleFunc("/v1/models", proxy.HandlePublicModels(pool))
 	mux.HandleFunc("/models", proxy.HandlePublicModels(pool))
 	mux.HandleFunc("/health", proxy.HandleHealth(pool))
-	mux.HandleFunc("/admin/accounts", proxy.HandleAdminAccounts(pool))
+	mux.HandleFunc("/admin/accounts", proxy.HandleAdminAccounts(pool, accountsDir))
 	mux.HandleFunc("/admin/accounts/reload", proxy.HandleAdminAccountsReload(pool, accountsDir))
 	mux.HandleFunc("/admin/accounts/refresh", proxy.HandleAdminAccountsRefresh(pool, accountsDir))
 	return mux

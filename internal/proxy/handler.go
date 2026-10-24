@@ -82,8 +82,16 @@ func HandlePublicModels(pool *AccountPool) http.HandlerFunc {
 	}
 }
 
-func HandleAdminAccounts(pool *AccountPool) http.HandlerFunc {
+func HandleAdminAccounts(pool *AccountPool, accountsDir ...string) http.HandlerFunc {
+	dir := "accounts"
+	if len(accountsDir) > 0 && strings.TrimSpace(accountsDir[0]) != "" {
+		dir = strings.TrimSpace(accountsDir[0])
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			HandleAddAccount(pool, dir)(w, r)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		var details []AccountDetail
 		total := 0
